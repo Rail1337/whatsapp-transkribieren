@@ -8,3 +8,9 @@ app/build/
 # Groß, wird per README-Schritt geholt
 third_party/
 app/src/main/assets/*.bin
+
+# Der Signierschluessel gehoert nie in dieses Repo (liegt im Repo whatsapp-transkribieren-signing)
+signing/
+*.jks
+*.keystore
+keystore.properties

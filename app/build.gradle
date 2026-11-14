@@ -24,10 +24,37 @@ android {
         }
     }
 
+    // Der Signierschlüssel liegt NICHT in diesem Repo, sondern im getrennten, privaten Repo
+    // "whatsapp-transkribieren-signing" (Standard: Nachbarordner, oder per TRANSKRIPTION_SIGNING_DIR).
+    def signDir = new File(System.getenv("TRANSKRIPTION_SIGNING_DIR") ?: "${rootProject.projectDir}/../whatsapp-transkribieren-signing")
+    def ksFile = new File(signDir, "keystore.properties")
+    def ksProps = new Properties()
+    if (ksFile.exists()) ksFile.withInputStream { ksProps.load(it) }
+
+    signingConfigs {
+        release {
+            if (ksFile.exists()) {
+                storeFile new File(signDir, ksProps['storeFile'])
+                storePassword ksProps['storePassword']
+                keyAlias ksProps['keyAlias']
+                keyPassword ksProps['keyPassword']
+            }
+        }
+    }
+
+    // Kein stilles Zurückfallen auf einen anderen Schlüssel: ohne Schlüssel gibt es keine Release-APK.
+    gradle.taskGraph.whenReady { graph ->
+        if (!ksFile.exists() && graph.allTasks.any { it.name.toLowerCase().contains("release") }) {
+            throw new GradleException("Signierschlüssel fehlt: ${ksFile} nicht gefunden. "
+                    + "Das Repo whatsapp-transkribieren-signing neben dieses Projekt legen "
+                    + "oder TRANSKRIPTION_SIGNING_DIR setzen.")
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.release
         }
     }
     compileOptions {

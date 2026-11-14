@@ -31,6 +31,10 @@ git clone --depth 1 https://github.com/ggml-org/whisper.cpp third_party/whisper.
 
 Dann `./gradlew.bat assembleDebug`. Gebaut wird nur nach ausdrücklichem Go. Voraussetzungen: Android SDK, NDK `27.2.12479018`, CMake `3.22.1`, JDK 21 (`org.gradle.java.home` in `gradle.properties`).
 
+## Signierschlüssel
+
+Der Schlüssel liegt **nicht** in diesem Repo, sondern im getrennten privaten Repo `whatsapp-transkribieren-signing`. Dieses Repo kann deshalb öffentlich sein. Für Release-Builds muss das Schlüssel-Repo als Nachbarordner liegen (`../whatsapp-transkribieren-signing`) oder `TRANSKRIPTION_SIGNING_DIR` auf seinen Ordner zeigen. Ohne Schlüssel bricht das Release-Build mit einer klaren Meldung ab. Ein Schlüsselwechsel hieße: alle müssen deinstallieren (Modelle und Namen weg), also den Schlüssel gut sichern.
+
 ## Stand
 
 Version 0.1: Java und nativer Code kompilieren, APK ist klein (kein Modell eingebaut). Noch nicht auf einem Handy getestet (Erkennungsqualität, Dauer pro Minute Audio, Speicherbedarf offen).
