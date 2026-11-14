@@ -180,6 +180,7 @@ public class MainActivity extends Activity {
         title.setTypeface(Typeface.SERIF, Typeface.BOLD);
         title.setTextColor(GOLD_LIGHT);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
+        fit(title, 16, 24);
         root.addView(title);
 
         LinearLayout byRow = new LinearLayout(this);
@@ -227,7 +228,8 @@ public class MainActivity extends Activity {
         listTitle.setText("Sprachnachrichten");
         listTitle.setTypeface(Typeface.SERIF, Typeface.BOLD);
         listTitle.setTextColor(TEXT);
-        listTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+        listTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        fit(listTitle, 11, 15);
         listHead.addView(listTitle, new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         Button refresh = textButton("Neu laden");
@@ -242,6 +244,7 @@ public class MainActivity extends Activity {
         usage.setText("Antippen: transkribieren   Dreieck: anhören   Stift: Namen vergeben");
         usage.setTextColor(MUTED);
         usage.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        fit(usage, 9, 12);
         usage.setPadding(dp(2), 0, 0, dp(8));
         root.addView(usage);
 
@@ -305,7 +308,7 @@ public class MainActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setPadding(0, dp(10), 0, 0);
-        Button pick = button("Datei wählen", false);
+        Button pick = button("Datei", false); // kurz, damit es auch bei großer Systemschrift in einer Zeile bleibt
         pick.setOnClickListener(v -> pickFile());
         copyBtn = button("Kopieren", true);
         copyBtn.setOnClickListener(v -> copyText());
@@ -343,10 +346,11 @@ public class MainActivity extends Activity {
         b.setAllCaps(false);
         b.setTextColor(TEXT);
         b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        fit(b, 11, 14);
         b.setTypeface(Typeface.SERIF, primary ? Typeface.BOLD : Typeface.NORMAL);
         b.setStateListAnimator(null);
-        b.setMinHeight(dp(46));
-        b.setPadding(dp(10), dp(8), dp(10), dp(8));
+        b.setHeight(dp(48)); // feste Höhe, damit alle Knöpfe einer Reihe gleich hoch sind
+        b.setPadding(dp(8), 0, dp(8), 0);
         GradientDrawable bg = primary ? round(BTN_ACTIVE, dp(12), GOLD, dp(1))
                 : round(BTN_IDLE, dp(12), BTN_ACTIVE, dp(1));
         b.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), bg, null));
@@ -357,6 +361,7 @@ public class MainActivity extends Activity {
         Button b = new Button(this);
         b.setText(text);
         b.setAllCaps(false);
+        b.setSingleLine(true);
         b.setTextColor(GOLD_LIGHT);
         b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         b.setStateListAnimator(null);
@@ -365,6 +370,12 @@ public class MainActivity extends Activity {
         b.setBackground(null);
         b.setPadding(dp(8), dp(4), dp(8), dp(4));
         return b;
+    }
+
+    /** Eine Zeile, die bei Platzmangel (schmales Handy, große Systemschrift) kleiner wird statt umzubrechen. */
+    private static void fit(TextView t, int minSp, int maxSp) {
+        t.setMaxLines(1);
+        t.setAutoSizeTextTypeUniformWithConfiguration(minSp, maxSp, 1, TypedValue.COMPLEX_UNIT_SP);
     }
 
     private void setEnabledLook(Button b, boolean on) {
@@ -380,7 +391,8 @@ public class MainActivity extends Activity {
     private void refreshButtons() {
         ModelStore.Model m = ModelStore.selected(this);
         modelBtn.setText("Modell: " + m.id + (ModelStore.isInstalled(this, m) ? "" : "  ↓"));
-        langBtn.setText("Sprache: " + selectedLanguage()[1]);
+        String lang = selectedLanguage()[1];
+        langBtn.setText("Sprache: " + (lang.startsWith("Automatisch") ? "Auto" : lang));
     }
 
     // ---------------------------------------------------------------- WhatsApp-Ordner
@@ -694,7 +706,7 @@ public class MainActivity extends Activity {
                 + "WhatsApp verrät der App nicht, von wem eine Nachricht ist, deshalb geht das nur von Hand. "
                 + "Bekannte Namen kannst du später wieder auswählen.\n\n"
                 + "Sprache: Standard ist Deutsch. Du kannst auf andere Sprachen oder automatische Erkennung umstellen.\n\n"
-                + "Datei wählen: transkribiert eine beliebige Audiodatei.\n\n"
+                + "Datei: transkribiert eine beliebige Audiodatei.\n\n"
                 + "Kopieren und Teilen: geben dir den Text weiter.\n\n"
                 + "DATENSCHUTZ\n"
                 + "Internet braucht die App nur, um Modelle zu laden. Sprachnachrichten und Texte verlassen "

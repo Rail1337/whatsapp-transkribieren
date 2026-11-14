@@ -39,4 +39,4 @@ Der Schlüssel liegt **nicht** in diesem Repo, sondern im getrennten privaten Re
 
 ## Stand
 
-Version 0.2: Im Emulator (x86_64, nur in der Debug-Variante) läuft die ganze Kette durch: Ordner verbinden, Abspielen mit Spulen, Modell laden mit Prüfsumme, Transkription mit Prozentanzeige. Auf einem echten Handy noch nicht getestet (Erkennungsqualität, Tempo, Speicherbedarf offen).
+Version 0.3: Im Emulator (x86_64, nur in der Debug-Variante) läuft die ganze Kette durch: Ordner verbinden, Abspielen mit Spulen, Modell laden mit Prüfsumme, Transkription mit Prozentanzeige. Auf einem echten Handy noch nicht getestet (Erkennungsqualität, Tempo, Speicherbedarf offen).
