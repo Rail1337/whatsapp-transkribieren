@@ -31,6 +31,17 @@ final class WhisperLib {
         return false;
     }
 
+    /** Wird vom nativen Code (jni.c) während der Transkription mit 0..100 aufgerufen. */
+    interface ProgressListener { void onProgress(int percent); }
+
+    static volatile ProgressListener listener;
+
+    @SuppressWarnings("unused") // wird per JNI aufgerufen
+    static void onProgress(int percent) {
+        ProgressListener l = listener;
+        if (l != null) l.onProgress(percent);
+    }
+
     static native long initContext(String modelPath);
     static native void freeContext(long contextPtr);
     /** Gibt 0 zurück, wenn es geklappt hat. */

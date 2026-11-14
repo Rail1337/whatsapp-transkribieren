@@ -30,6 +30,7 @@ import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -84,6 +85,26 @@ public class MainActivity extends Activity {
     private Uri playingUri;
     private ImageView playingBtn;
     private String titleForNext = null;
+
+    private MeterBar meter;
+    // Abspiel-Leiste der gerade laufenden Nachricht
+    private LinearLayout playingSeekRow;
+    private SeekBar playingSeek;
+    private TextView playingTime;
+    private boolean seeking = false;
+    private final Runnable ticker = new Runnable() {
+        @Override
+        public void run() {
+            if (player == null || playingSeek == null) return;
+            if (!seeking) {
+                try {
+                    playingSeek.setProgress(player.getCurrentPosition());
+                    updateTime(player.getCurrentPosition(), player.getDuration());
+                } catch (IllegalStateException ignored) { return; }
+            }
+            ui.postDelayed(this, 200);
+        }
+    };
 
     private long ctx = 0;           // geladener Whisper-Kontext
     private String ctxModelId = ""; // zu welchem Modell er gehört
@@ -249,6 +270,14 @@ public class MainActivity extends Activity {
         status.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         status.setPadding(dp(2), dp(8), dp(2), dp(6));
         root.addView(status);
+
+        // Fortschrittsbalken (wie im transcript-tool), nur sichtbar, solange etwas läuft
+        meter = new MeterBar(this);
+        meter.setVisibility(View.GONE);
+        LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(8));
+        mlp.bottomMargin = dp(8);
+        root.addView(meter, mlp);
 
         // Ergebnis
         resultCard = new LinearLayout(this);
@@ -428,17 +457,38 @@ public class MainActivity extends Activity {
             final String when = whenText(n.modified);
             final String sizeText = n.size > 0 ? Math.max(1, n.size / 1024) + " KB" : "";
 
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF),
+                    round(PANEL, dp(12), BTN_IDLE, dp(1)), null));
+            card.setClickable(true);
+            card.setOnClickListener(v -> startTranscription(n.uri, label != null ? label + " · " + when : when));
+
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
             row.setPadding(dp(8), dp(8), dp(8), dp(8));
-            row.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF),
-                    round(PANEL, dp(12), BTN_IDLE, dp(1)), null));
-            row.setClickable(true);
-            row.setOnClickListener(v -> startTranscription(n.uri, label != null ? label + " · " + when : when));
+
+            // Abspiel-Leiste: Dot zum Vor- und Zurückspulen, erscheint nur beim Abspielen
+            final LinearLayout seekRow = new LinearLayout(this);
+            seekRow.setOrientation(LinearLayout.HORIZONTAL);
+            seekRow.setGravity(Gravity.CENTER_VERTICAL);
+            seekRow.setPadding(dp(14), 0, dp(14), dp(10));
+            seekRow.setVisibility(View.GONE);
+            final SeekBar seek = new SeekBar(this);
+            seek.setProgressTintList(ColorStateList.valueOf(GREEN));
+            seek.setProgressBackgroundTintList(ColorStateList.valueOf(0xFF4A6B52));
+            seek.setThumbTintList(ColorStateList.valueOf(GOLD_LIGHT));
+            seek.setMinimumHeight(dp(28));
+            final TextView time = new TextView(this);
+            time.setTextColor(MUTED);
+            time.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            time.setPadding(dp(10), 0, 0, 0);
+            seekRow.addView(seek, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            seekRow.addView(time);
 
             final ImageView play = iconButton(R.drawable.ic_play, true);
-            play.setOnClickListener(v -> togglePlay(n.uri, play));
+            play.setOnClickListener(v -> togglePlay(n.uri, play, seekRow, seek, time));
             row.addView(play, new LinearLayout.LayoutParams(dp(46), dp(46)));
 
             LinearLayout texts = new LinearLayout(this);
@@ -464,7 +514,9 @@ public class MainActivity extends Activity {
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
             lp.bottomMargin = dp(6);
-            noteRows.addView(row, lp);
+            card.addView(row);
+            card.addView(seekRow);
+            noteRows.addView(card, lp);
         }
     }
 
@@ -500,7 +552,7 @@ public class MainActivity extends Activity {
 
     // ---------------------------------------------------------------- Abspielen
 
-    private void togglePlay(Uri uri, ImageView btn) {
+    private void togglePlay(Uri uri, ImageView btn, LinearLayout seekRow, SeekBar seek, TextView time) {
         boolean same = player != null && uri.equals(playingUri);
         stopPlayback();
         if (same) return;
@@ -512,24 +564,61 @@ public class MainActivity extends Activity {
             player.setDataSource(this, uri);
             player.setOnCompletionListener(mp -> stopPlayback());
             player.prepare();
+            final int duration = Math.max(1, player.getDuration());
             player.start();
             playingUri = uri;
             playingBtn = btn;
+            playingSeekRow = seekRow;
+            playingSeek = seek;
+            playingTime = time;
             btn.setImageResource(R.drawable.ic_stop);
+
+            seek.setMax(duration);
+            seek.setProgress(0);
+            seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override public void onProgressChanged(SeekBar s, int progress, boolean fromUser) {
+                    if (fromUser) updateTime(progress, duration);
+                }
+                @Override public void onStartTrackingTouch(SeekBar s) { seeking = true; }
+                @Override public void onStopTrackingTouch(SeekBar s) {
+                    if (player != null) player.seekTo(s.getProgress());
+                    seeking = false;
+                }
+            });
+            updateTime(0, duration);
+            seekRow.setVisibility(View.VISIBLE);
+            ui.removeCallbacks(ticker);
+            ui.postDelayed(ticker, 200);
         } catch (Exception e) {
             stopPlayback();
             status.setText("Abspielen nicht möglich: " + e.getMessage());
         }
     }
 
+    private void updateTime(int posMs, int durMs) {
+        if (playingTime != null) playingTime.setText(clock(posMs / 1000) + " / " + clock(durMs / 1000));
+    }
+
+    /** 0:07 oder 12:03 */
+    private static String clock(int seconds) {
+        seconds = Math.max(0, seconds);
+        return String.format(Locale.GERMANY, "%d:%02d", seconds / 60, seconds % 60);
+    }
+
     private void stopPlayback() {
+        ui.removeCallbacks(ticker);
         if (player != null) {
             try { player.release(); } catch (Exception ignored) { }
             player = null;
         }
         if (playingBtn != null) playingBtn.setImageResource(R.drawable.ic_play);
+        if (playingSeekRow != null) playingSeekRow.setVisibility(View.GONE);
         playingBtn = null;
+        playingSeekRow = null;
+        playingSeek = null;
+        playingTime = null;
         playingUri = null;
+        seeking = false;
     }
 
     // ---------------------------------------------------------------- Namen
@@ -715,7 +804,7 @@ public class MainActivity extends Activity {
     private void downloadModel(final ModelStore.Model m, final Runnable afterwards) {
         if (busy) { toastBusy(); return; }
         busy = true;
-        status.setText("Lade " + m.label + " … 0 %");
+        showProgress("Lade " + m.label + " … 0 %", 0);
         worker.execute(() -> {
             try {
                 final int[] last = {-1};
@@ -723,11 +812,13 @@ public class MainActivity extends Activity {
                     int pct = (int) (done * 100 / total);
                     if (pct != last[0]) {
                         last[0] = pct;
-                        setStatus("Lade " + m.label + " … " + pct + " %");
+                        showProgressAsync(String.format(Locale.GERMANY, "Lade %s … %d %% (%d von %d MB)",
+                                m.label, pct, done / 1_000_000, total / 1_000_000), pct);
                     }
                 });
                 ui.post(() -> {
                     busy = false;
+                    hideProgress();
                     status.setText(m.label + " ist geladen.");
                     if (afterwards != null) afterwards.run();
                     refreshButtons();
@@ -735,6 +826,7 @@ public class MainActivity extends Activity {
             } catch (final Exception e) {
                 ui.post(() -> {
                     busy = false;
+                    hideProgress();
                     status.setText("Laden hat nicht geklappt: " + e.getMessage());
                     refreshButtons();
                 });
@@ -805,12 +897,13 @@ public class MainActivity extends Activity {
         resultCard.setVisibility(View.GONE);
         setEnabledLook(copyBtn, false);
         setEnabledLook(shareBtn, false);
-        status.setText("Lese Sprachnachricht …");
+        meter.reset();
+        showBusy("Lese Sprachnachricht …");
 
         worker.execute(() -> {
             try {
                 float[] audio = AudioDecoder.decode(this, uri);
-                float seconds = audio.length / (float) AudioDecoder.TARGET_RATE;
+                final float seconds = audio.length / (float) AudioDecoder.TARGET_RATE;
 
                 if (ctx != 0 && !ctxModelId.equals(model.id)) {
                     WhisperLib.freeContext(ctx);
@@ -818,7 +911,7 @@ public class MainActivity extends Activity {
                     ctxModelId = "";
                 }
                 if (ctx == 0) {
-                    setStatus("Lade " + model.label + " in den Speicher …");
+                    ui.post(() -> showBusy("Lade " + model.label + " in den Speicher …"));
                     ctx = WhisperLib.initContext(ModelStore.fileOf(this, model).getAbsolutePath());
                     if (ctx == 0) {
                         // Datei kaputt: löschen, damit sie beim nächsten Mal neu geladen wird.
@@ -829,10 +922,23 @@ public class MainActivity extends Activity {
                     ctxModelId = model.id;
                 }
 
-                setStatus(String.format(Locale.GERMANY, "Transkribiere %.0f Sekunden Audio …", seconds));
-                long t0 = System.currentTimeMillis();
+                final long t0 = System.currentTimeMillis();
+                ui.post(() -> showProgress(String.format(Locale.GERMANY,
+                        "Transkribiere … 00:00 von %s", clock(Math.round(seconds))), 0));
+                // Echter Fortschritt von Whisper, dazu Position im Audio und grobe Restzeit
+                WhisperLib.listener = pct -> {
+                    double elapsed = (System.currentTimeMillis() - t0) / 1000.0;
+                    String eta = (elapsed >= 6 && pct >= 3) ? " · " + remaining(elapsed * (100 - pct) / pct) : "";
+                    showProgressAsync(String.format(Locale.GERMANY, "Transkribiere … %s von %s · %d %%%s",
+                            clock(Math.round(seconds * pct / 100f)), clock(Math.round(seconds)), pct, eta), pct);
+                };
                 int threads = Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors()));
-                int rc = WhisperLib.fullTranscribe(ctx, threads, audio, selectedLanguage()[0]);
+                int rc;
+                try {
+                    rc = WhisperLib.fullTranscribe(ctx, threads, audio, selectedLanguage()[0]);
+                } finally {
+                    WhisperLib.listener = null;
+                }
                 if (rc != 0) throw new IllegalStateException("Whisper meldet Fehler " + rc + ".");
 
                 StringBuilder sb = new StringBuilder();
@@ -843,6 +949,7 @@ public class MainActivity extends Activity {
 
                 ui.post(() -> {
                     busy = false;
+                    hideProgress();
                     status.setText(String.format(Locale.GERMANY,
                             "Fertig. %.0f s Audio in %.1f s transkribiert.", seconds, took));
                     resultTitle.setText(title != null ? title : "");
@@ -855,6 +962,7 @@ public class MainActivity extends Activity {
             } catch (final Exception e) {
                 ui.post(() -> {
                     busy = false;
+                    hideProgress();
                     status.setText("Das hat nicht geklappt: " + e.getMessage());
                     refreshButtons();
                 });
@@ -866,6 +974,36 @@ public class MainActivity extends Activity {
 
     private void setStatus(final String s) {
         ui.post(() -> status.setText(s));
+    }
+
+    // Fortschritt (Muster aus dem transcript-tool: echte Prozent, wo es sie gibt, sonst Puls)
+
+    private void showProgress(String text, int percent) {
+        status.setText(text);
+        meter.setVisibility(View.VISIBLE);
+        meter.setPercent(percent);
+    }
+
+    private void showProgressAsync(final String text, final int percent) {
+        ui.post(() -> showProgress(text, percent));
+    }
+
+    private void showBusy(String text) {
+        status.setText(text);
+        meter.setVisibility(View.VISIBLE);
+        meter.setBusy();
+    }
+
+    private void hideProgress() {
+        meter.reset();
+        meter.setVisibility(View.GONE);
+    }
+
+    /** Grobe Restzeit: "ca. 20 s", "unter 2 min", "ca. 3 min". */
+    private static String remaining(double seconds) {
+        if (seconds < 45) return "ca. " + Math.max(5, (int) (Math.ceil(seconds / 5) * 5)) + " s übrig";
+        if (seconds < 90) return "unter 2 min übrig";
+        return "ca. " + Math.round(seconds / 60) + " min übrig";
     }
 
     private void toastBusy() {

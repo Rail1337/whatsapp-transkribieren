@@ -161,6 +161,22 @@ Java_com_railarcanum_transkription_WhisperLib_freeContext(
     whisper_free(context);
 }
 
+// Meldet den echten Fortschritt von whisper.cpp (0..100) an WhisperLib.onProgress.
+// whisper_full ruft den Callback auf dem Thread auf, der es aufgerufen hat, daher ist env gueltig.
+struct progress_ctx {
+    JNIEnv *env;
+    jclass cls;
+    jmethodID mid;
+};
+
+static void progress_cb(struct whisper_context *ctx, struct whisper_state *state, int progress,
+                        void *user_data) {
+    UNUSED(ctx);
+    UNUSED(state);
+    struct progress_ctx *p = (struct progress_ctx *) user_data;
+    (*p->env)->CallStaticVoidMethod(p->env, p->cls, p->mid, (jint) progress);
+}
+
 JNIEXPORT jint JNICALL
 Java_com_railarcanum_transkription_WhisperLib_fullTranscribe(
         JNIEnv *env, jclass thiz, jlong context_ptr, jint num_threads, jfloatArray audio_data,
@@ -183,6 +199,14 @@ Java_com_railarcanum_transkription_WhisperLib_fullTranscribe(
     params.offset_ms = 0;
     params.no_context = true;
     params.single_segment = false;
+
+    struct progress_ctx pc = { env, thiz, (*env)->GetStaticMethodID(env, thiz, "onProgress", "(I)V") };
+    if (pc.mid != NULL) {
+        params.progress_callback = progress_cb;
+        params.progress_callback_user_data = &pc;
+    } else {
+        (*env)->ExceptionClear(env); // ohne Java-Seite laeuft die Transkription trotzdem, nur ohne Prozent
+    }
 
     whisper_reset_timings(context);
 
