@@ -85,6 +85,14 @@ public class MainActivity extends Activity {
     private Uri playingUri;
     private ImageView playingBtn;
     private String titleForNext = null;
+    private String keyForNext = null;
+
+    // Gerade angezeigtes Ergebnis aus der Liste (für "Neu transkribieren" und "Löschen")
+    private String currentKey;
+    private Uri currentUri;
+    private String currentTitle;
+    private LinearLayout resultActions;
+    private final java.util.Map<String, TextView> previews = new java.util.HashMap<>();
 
     private MeterBar meter;
     // Abspiel-Leiste der gerade laufenden Nachricht
@@ -294,6 +302,18 @@ public class MainActivity extends Activity {
         resultTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         resultTitle.setPadding(0, 0, 0, dp(6));
         resultCard.addView(resultTitle);
+        resultActions = new LinearLayout(this);
+        resultActions.setOrientation(LinearLayout.HORIZONTAL);
+        resultActions.setVisibility(View.GONE);
+        Button redo = textButton("Neu transkribieren");
+        redo.setOnClickListener(v -> {
+            if (currentKey != null && currentUri != null) startTranscription(currentUri, currentTitle, currentKey, true);
+        });
+        Button del = textButton("Text löschen");
+        del.setOnClickListener(v -> deleteCurrentTranscript());
+        resultActions.addView(redo);
+        resultActions.addView(del);
+        resultCard.addView(resultActions);
         ScrollView resultScroll = new ScrollView(this);
         result = new TextView(this);
         result.setTextIsSelectable(true);
@@ -456,6 +476,7 @@ public class MainActivity extends Activity {
     private void renderNotes(List<VoiceNotes.Note> notes) {
         lastNotes = notes;
         stopPlayback();
+        previews.clear();
         noteRows.removeAllViews();
         if (notes.isEmpty()) {
             noteHint.setVisibility(View.VISIBLE);
@@ -474,7 +495,7 @@ public class MainActivity extends Activity {
             card.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF),
                     round(PANEL, dp(12), BTN_IDLE, dp(1)), null));
             card.setClickable(true);
-            card.setOnClickListener(v -> startTranscription(n.uri, label != null ? label + " · " + when : when));
+            card.setOnClickListener(v -> startTranscription(n.uri, label != null ? label + " · " + when : when, n.name, false));
 
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
@@ -517,6 +538,19 @@ public class MainActivity extends Activity {
             line2.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
             texts.addView(line1);
             texts.addView(line2);
+            TextView line3 = new TextView(this);
+            line3.setTextColor(GREEN);
+            line3.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            line3.setSingleLine(true);
+            line3.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            TranscriptStore.Entry saved = TranscriptStore.get(this, n.name);
+            if (saved != null) {
+                line3.setText("✓ " + preview(saved.text));
+            } else {
+                line3.setVisibility(View.GONE);
+            }
+            texts.addView(line3);
+            previews.put(n.name, line3);
             row.addView(texts, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
             ImageView edit = iconButton(R.drawable.ic_edit, false);
@@ -889,8 +923,18 @@ public class MainActivity extends Activity {
     }
 
     private void startTranscription(final Uri uri, String title) {
+        startTranscription(uri, title, null, false);
+    }
+
+    /** Mit key (Dateiname aus der Liste) wird das Ergebnis gemerkt und beim nächsten Antippen sofort gezeigt. */
+    private void startTranscription(final Uri uri, String title, String key, boolean force) {
         if (busy) { toastBusy(); return; }
+        if (key != null && !force) {
+            TranscriptStore.Entry saved = TranscriptStore.get(this, key);
+            if (saved != null) { showSaved(uri, title, key, saved); return; }
+        }
         titleForNext = title;
+        keyForNext = key;
         ModelStore.Model m = ModelStore.selected(this);
         if (ModelStore.isInstalled(this, m)) {
             transcribe(uri, m);
@@ -904,7 +948,10 @@ public class MainActivity extends Activity {
         if (busy) { toastBusy(); return; }
         busy = true;
         final String title = titleForNext;
+        final String key = keyForNext;
         titleForNext = null;
+        keyForNext = null;
+        resultActions.setVisibility(View.GONE);
         result.setText("");
         resultCard.setVisibility(View.GONE);
         setEnabledLook(copyBtn, false);
@@ -967,6 +1014,17 @@ public class MainActivity extends Activity {
                     resultTitle.setText(title != null ? title : "");
                     result.setText(text.isEmpty() ? "(Kein Text erkannt)" : text);
                     resultCard.setVisibility(View.VISIBLE);
+                    if (key != null && !text.isEmpty()) {
+                        try {
+                            TranscriptStore.put(this, key, text, model.id, selectedLanguage()[0]);
+                            currentKey = key; currentUri = uri; currentTitle = title;
+                            resultActions.setVisibility(View.VISIBLE);
+                            TextView pv = previews.get(key);
+                            if (pv != null) { pv.setText("✓ " + preview(text)); pv.setVisibility(View.VISIBLE); }
+                        } catch (RuntimeException e) {
+                            status.setText("Fertig, aber der Text ließ sich nicht speichern: " + e.getMessage());
+                        }
+                    }
                     setEnabledLook(copyBtn, !text.isEmpty());
                     setEnabledLook(shareBtn, !text.isEmpty());
                     refreshButtons();
@@ -980,6 +1038,42 @@ public class MainActivity extends Activity {
                 });
             }
         });
+    }
+
+    // ---------------------------------------------------------------- Gespeicherte Texte
+
+    private void showSaved(Uri uri, String title, String key, TranscriptStore.Entry e) {
+        currentKey = key; currentUri = uri; currentTitle = title;
+        resultTitle.setText(title != null ? title : "");
+        result.setText(e.text);
+        resultCard.setVisibility(View.VISIBLE);
+        resultActions.setVisibility(View.VISIBLE);
+        setEnabledLook(copyBtn, true);
+        setEnabledLook(shareBtn, true);
+        status.setText("Gespeicherte Transkription (" + e.modelId + ", " + langName(e.lang) + ").");
+    }
+
+    private void deleteCurrentTranscript() {
+        if (currentKey == null) return;
+        TranscriptStore.delete(this, currentKey);
+        TextView pv = previews.get(currentKey);
+        if (pv != null) pv.setVisibility(View.GONE);
+        resultCard.setVisibility(View.GONE);
+        resultActions.setVisibility(View.GONE);
+        setEnabledLook(copyBtn, false);
+        setEnabledLook(shareBtn, false);
+        currentKey = null;
+        status.setText("Gespeicherten Text gelöscht.");
+    }
+
+    private static String preview(String text) {
+        String t = text.replace('\n', ' ').trim();
+        return t.length() > 60 ? t.substring(0, 60) + "…" : t;
+    }
+
+    private static String langName(String code) {
+        for (String[] l : LANGUAGES) if (l[0].equals(code)) return l[1];
+        return code;
     }
 
     // ---------------------------------------------------------------- Kleinkram

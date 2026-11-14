@@ -7,6 +7,7 @@ Android-App, die WhatsApp-Sprachnachrichten offline auf Deutsch in Text umwandel
 - Jede Nachricht lässt sich in der Liste anhören (Dreieck) und mit einem selbst vergebenen Namen versehen (Stift). WhatsApp speichert nicht, von wem eine Nachricht ist, deshalb geht das nicht automatisch.
 - Beim Abspielen erscheint eine Leiste mit goldenem Dot: ziehen zum Vor- und Zurückspulen, dazu Zeit und Gesamtlänge.
 - Fortschrittsbalken für das Laden der Modelle und für die Transkription (echte Prozent von Whisper, Position im Audio und grobe Restzeit, Muster aus dem transcript-tool).
+- Fertige Transkriptionen aus der Liste werden lokal gemerkt (pro Nachricht, mit Modell und Sprache): Antippen zeigt den Text sofort, die Liste zeigt eine Vorschau mit Haken. Dazu "Neu transkribieren" und "Text löschen". Die neuesten 300 bleiben, ältere werden verdrängt.
 - Der Info-Knopf erklärt Modelle und Funktionen.
 - Der Text lässt sich kopieren oder weiterteilen.
 - Sprachmodelle (base 60 MB, small 190 MB, medium 540 MB) lädt man in der App und kann mehrere behalten. Beim ersten Start wird das gewählte Modell geladen (Prüfsumme SHA-256, im Mobilfunknetz mit Warnung). Das ist der einzige Netzzugriff, Sprachnachrichten und Texte verlassen das Handy nie.
@@ -39,4 +40,4 @@ Der Schlüssel liegt **nicht** in diesem Repo, sondern im getrennten privaten Re
 
 ## Stand
 
-Version 0.3: Im Emulator (x86_64, nur in der Debug-Variante) läuft die ganze Kette durch: Ordner verbinden, Abspielen mit Spulen, Modell laden mit Prüfsumme, Transkription mit Prozentanzeige. Auf einem echten Handy noch nicht getestet (Erkennungsqualität, Tempo, Speicherbedarf offen).
+Version 0.4: Im Emulator (x86_64, nur in der Debug-Variante) läuft die ganze Kette durch: Ordner verbinden, Abspielen mit Spulen, Modell laden mit Prüfsumme, Transkription mit Prozentanzeige. Auf einem echten Handy noch nicht getestet (Erkennungsqualität, Tempo, Speicherbedarf offen).
