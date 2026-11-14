@@ -4,13 +4,15 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
-import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
+import android.media.AudioAttributes;
+import android.media.MediaPlayer;
 import android.net.ConnectivityManager;
 import android.net.Uri;
 import android.os.Build;
@@ -18,21 +20,26 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.DocumentsContract;
+import android.text.InputType;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowInsets;
 import android.widget.Button;
+import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.TreeSet;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -62,6 +69,7 @@ public class MainActivity extends Activity {
 
     private TextView status;
     private TextView result;
+    private TextView resultTitle;
     private LinearLayout resultCard;
     private LinearLayout noteRows;
     private TextView noteHint;
@@ -70,6 +78,12 @@ public class MainActivity extends Activity {
     private Button langBtn;
     private Button copyBtn;
     private Button shareBtn;
+
+    private List<VoiceNotes.Note> lastNotes = new ArrayList<>();
+    private MediaPlayer player;
+    private Uri playingUri;
+    private ImageView playingBtn;
+    private String titleForNext = null;
 
     private long ctx = 0;           // geladener Whisper-Kontext
     private String ctxModelId = ""; // zu welchem Modell er gehört
@@ -98,8 +112,15 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onPause() {
+        super.onPause();
+        stopPlayback();
+    }
+
+    @Override
     protected void onDestroy() {
         super.onDestroy();
+        stopPlayback();
         worker.shutdown();
         final long c = ctx;
         ctx = 0;
@@ -132,7 +153,7 @@ public class MainActivity extends Activity {
             return insets;
         });
 
-        // Kopf: Titel und "by Rail"
+        // Kopf: Titel, "by Rail" und Info
         TextView title = new TextView(this);
         title.setText("WhatsApp Transkription");
         title.setTypeface(Typeface.SERIF, Typeface.BOLD);
@@ -140,13 +161,20 @@ public class MainActivity extends Activity {
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
         root.addView(title);
 
+        LinearLayout byRow = new LinearLayout(this);
+        byRow.setOrientation(LinearLayout.HORIZONTAL);
+        byRow.setGravity(Gravity.CENTER_VERTICAL);
+        byRow.setPadding(0, dp(2), 0, dp(12));
         TextView by = new TextView(this);
         by.setText("by Rail  ·  läuft komplett auf deinem Handy");
         by.setTypeface(Typeface.SERIF, Typeface.ITALIC);
         by.setTextColor(MUTED);
         by.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        by.setPadding(0, dp(2), 0, dp(12));
-        root.addView(by);
+        byRow.addView(by, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        Button info = textButton("Info");
+        info.setOnClickListener(v -> showInfo());
+        byRow.addView(info);
+        root.addView(byRow);
 
         // Modell und Sprache
         LinearLayout chips = new LinearLayout(this);
@@ -163,7 +191,7 @@ public class MainActivity extends Activity {
         LinearLayout listHead = new LinearLayout(this);
         listHead.setOrientation(LinearLayout.HORIZONTAL);
         listHead.setGravity(Gravity.CENTER_VERTICAL);
-        listHead.setPadding(0, dp(16), 0, dp(6));
+        listHead.setPadding(0, dp(16), 0, dp(2));
         TextView listTitle = new TextView(this);
         listTitle.setText("Sprachnachrichten");
         listTitle.setTypeface(Typeface.SERIF, Typeface.BOLD);
@@ -178,6 +206,13 @@ public class MainActivity extends Activity {
         listHead.addView(refresh);
         listHead.addView(change);
         root.addView(listHead);
+
+        TextView usage = new TextView(this);
+        usage.setText("Antippen: transkribieren   Dreieck: anhören   Stift: Namen vergeben");
+        usage.setTextColor(MUTED);
+        usage.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        usage.setPadding(dp(2), 0, 0, dp(8));
+        root.addView(usage);
 
         // Liste der Sprachnachrichten
         ScrollView listScroll = new ScrollView(this);
@@ -211,6 +246,12 @@ public class MainActivity extends Activity {
         resultCard.setBackground(round(PANEL, dp(14), BTN_IDLE, dp(1)));
         resultCard.setPadding(dp(14), dp(12), dp(14), dp(12));
         resultCard.setVisibility(View.GONE);
+        resultTitle = new TextView(this);
+        resultTitle.setTextColor(GOLD_LIGHT);
+        resultTitle.setTypeface(Typeface.SERIF, Typeface.BOLD);
+        resultTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        resultTitle.setPadding(0, 0, 0, dp(6));
+        resultCard.addView(resultTitle);
         ScrollView resultScroll = new ScrollView(this);
         result = new TextView(this);
         result.setTextIsSelectable(true);
@@ -362,6 +403,8 @@ public class MainActivity extends Activity {
     }
 
     private void renderNotes(List<VoiceNotes.Note> notes) {
+        lastNotes = notes;
+        stopPlayback();
         noteRows.removeAllViews();
         if (notes.isEmpty()) {
             noteHint.setVisibility(View.VISIBLE);
@@ -371,31 +414,58 @@ public class MainActivity extends Activity {
         }
         noteHint.setVisibility(View.GONE);
         for (final VoiceNotes.Note n : notes) {
+            final String label = nameOf(n);
+            final String when = whenText(n.modified);
+            final String sizeText = n.size > 0 ? Math.max(1, n.size / 1024) + " KB" : "";
+
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(dp(14), dp(12), dp(14), dp(12));
+            row.setPadding(dp(8), dp(8), dp(8), dp(8));
             row.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF),
                     round(PANEL, dp(12), BTN_IDLE, dp(1)), null));
             row.setClickable(true);
-            row.setOnClickListener(v -> startTranscription(n.uri));
+            row.setOnClickListener(v -> startTranscription(n.uri, label != null ? label + " · " + when : when));
 
-            TextView when = new TextView(this);
-            when.setText(whenText(n.modified));
-            when.setTextColor(TEXT);
-            when.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-            TextView size = new TextView(this);
-            size.setText(n.size > 0 ? Math.max(1, n.size / 1024) + " KB" : "");
-            size.setTextColor(MUTED);
-            size.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-            row.addView(when, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-            row.addView(size);
+            final ImageView play = iconButton(R.drawable.ic_play, true);
+            play.setOnClickListener(v -> togglePlay(n.uri, play));
+            row.addView(play, new LinearLayout.LayoutParams(dp(46), dp(46)));
+
+            LinearLayout texts = new LinearLayout(this);
+            texts.setOrientation(LinearLayout.VERTICAL);
+            texts.setPadding(dp(12), 0, dp(8), 0);
+            TextView line1 = new TextView(this);
+            line1.setText(label != null ? label : when);
+            line1.setTextColor(TEXT);
+            line1.setTypeface(Typeface.SERIF, label != null ? Typeface.BOLD : Typeface.NORMAL);
+            line1.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+            TextView line2 = new TextView(this);
+            line2.setText((label != null ? when + " · " : "") + sizeText);
+            line2.setTextColor(MUTED);
+            line2.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            texts.addView(line1);
+            texts.addView(line2);
+            row.addView(texts, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+            ImageView edit = iconButton(R.drawable.ic_edit, false);
+            edit.setOnClickListener(v -> editName(n));
+            row.addView(edit, new LinearLayout.LayoutParams(dp(42), dp(42)));
 
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
             lp.bottomMargin = dp(6);
             noteRows.addView(row, lp);
         }
+    }
+
+    private ImageView iconButton(int res, boolean filled) {
+        ImageView v = new ImageView(this);
+        v.setImageResource(res);
+        v.setScaleType(ImageView.ScaleType.CENTER);
+        v.setClickable(true);
+        GradientDrawable bg = filled ? round(BTN_ACTIVE, dp(23), GOLD, dp(1)) : round(0x00000000, dp(21), 0, 0);
+        v.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), bg, null));
+        return v;
     }
 
     private static String whenText(long millis) {
@@ -416,6 +486,131 @@ public class MainActivity extends Activity {
         d.set(Calendar.SECOND, 0);
         d.set(Calendar.MILLISECOND, 0);
         return d.getTimeInMillis();
+    }
+
+    // ---------------------------------------------------------------- Abspielen
+
+    private void togglePlay(Uri uri, ImageView btn) {
+        boolean same = player != null && uri.equals(playingUri);
+        stopPlayback();
+        if (same) return;
+        try {
+            player = new MediaPlayer();
+            player.setAudioAttributes(new AudioAttributes.Builder()
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .setUsage(AudioAttributes.USAGE_MEDIA).build());
+            player.setDataSource(this, uri);
+            player.setOnCompletionListener(mp -> stopPlayback());
+            player.prepare();
+            player.start();
+            playingUri = uri;
+            playingBtn = btn;
+            btn.setImageResource(R.drawable.ic_stop);
+        } catch (Exception e) {
+            stopPlayback();
+            status.setText("Abspielen nicht möglich: " + e.getMessage());
+        }
+    }
+
+    private void stopPlayback() {
+        if (player != null) {
+            try { player.release(); } catch (Exception ignored) { }
+            player = null;
+        }
+        if (playingBtn != null) playingBtn.setImageResource(R.drawable.ic_play);
+        playingBtn = null;
+        playingUri = null;
+    }
+
+    // ---------------------------------------------------------------- Namen
+
+    private SharedPreferences names() {
+        return getSharedPreferences("namen", MODE_PRIVATE);
+    }
+
+    /** WhatsApp speichert nicht, von wem eine Nachricht ist, deshalb vergibt man den Namen selbst. */
+    private String nameOf(VoiceNotes.Note n) {
+        return names().getString(n.name, null);
+    }
+
+    private void editName(final VoiceNotes.Note n) {
+        TreeSet<String> known = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+        for (Object v : names().getAll().values()) known.add(String.valueOf(v));
+        if (known.isEmpty()) { askNewName(n); return; }
+        final List<String> items = new ArrayList<>(known);
+        final int newIdx = items.size();
+        items.add("Neuer Name …");
+        final int removeIdx = nameOf(n) != null ? items.size() : -1;
+        if (removeIdx >= 0) items.add("Namen entfernen");
+        new AlertDialog.Builder(this)
+                .setTitle("Von wem ist die Nachricht?")
+                .setItems(items.toArray(new String[0]), (d, which) -> {
+                    if (which == newIdx) { askNewName(n); return; }
+                    if (which == removeIdx) names().edit().remove(n.name).apply();
+                    else names().edit().putString(n.name, items.get(which)).apply();
+                    renderNotes(lastNotes);
+                })
+                .setNegativeButton("Abbrechen", null)
+                .show();
+    }
+
+    private void askNewName(final VoiceNotes.Note n) {
+        final EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+        input.setSingleLine(true);
+        String cur = nameOf(n);
+        if (cur != null) input.setText(cur);
+        new AlertDialog.Builder(this)
+                .setTitle("Name für diese Nachricht")
+                .setMessage("Zum Beispiel der Name aus dem Chat. Die App merkt ihn sich.")
+                .setView(input)
+                .setPositiveButton("Speichern", (d, w) -> {
+                    String name = input.getText().toString().trim();
+                    if (name.isEmpty()) names().edit().remove(n.name).apply();
+                    else names().edit().putString(n.name, name).apply();
+                    renderNotes(lastNotes);
+                })
+                .setNegativeButton("Abbrechen", null)
+                .show();
+    }
+
+    // ---------------------------------------------------------------- Info
+
+    private void showInfo() {
+        String text = "MODELLE\n"
+                + "Alle laufen auf deinem Handy. Du lädst sie einmal, danach geht es ohne Netz. "
+                + "Du kannst mehrere behalten und jederzeit wechseln.\n\n"
+                + "base (60 MB): am schnellsten, läuft auch auf älteren Handys. Gut bei klarer Sprache, "
+                + "macht bei Nuscheln, Dialekt oder Lärm mehr Fehler.\n\n"
+                + "small (190 MB): der Mittelweg und für die meisten Handys die beste Wahl. "
+                + "Deutlich genauer als base.\n\n"
+                + "medium (540 MB): am genauesten, auch bei Dialekt und Hintergrundgeräuschen. "
+                + "Braucht viel Arbeitsspeicher und Zeit, nur für starke Handys.\n\n"
+                + "FUNKTIONEN\n"
+                + "Teilen aus WhatsApp: Sprachnachricht gedrückt halten, Teilen, diese App wählen.\n\n"
+                + "WhatsApp-Ordner verbinden: Du bestätigst den Ordner einmal, danach stehen die "
+                + "Sprachnachrichten hier als Liste. Antippen transkribiert.\n\n"
+                + "Anhören: Das Dreieck spielt die Nachricht ab, das Quadrat stoppt sie.\n\n"
+                + "Namen: Mit dem Stift gibst du einer Nachricht einen Namen, zum Beispiel den aus dem Chat. "
+                + "WhatsApp verrät der App nicht, von wem eine Nachricht ist, deshalb geht das nur von Hand. "
+                + "Bekannte Namen kannst du später wieder auswählen.\n\n"
+                + "Sprache: Standard ist Deutsch. Du kannst auf andere Sprachen oder automatische Erkennung umstellen.\n\n"
+                + "Datei wählen: transkribiert eine beliebige Audiodatei.\n\n"
+                + "Kopieren und Teilen: geben dir den Text weiter.\n\n"
+                + "DATENSCHUTZ\n"
+                + "Internet braucht die App nur, um Modelle zu laden. Sprachnachrichten und Texte verlassen "
+                + "das Handy nie.";
+        TextView body = new TextView(this);
+        body.setText(text);
+        body.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        body.setPadding(dp(20), dp(8), dp(20), dp(8));
+        ScrollView sv = new ScrollView(this);
+        sv.addView(body);
+        new AlertDialog.Builder(this)
+                .setTitle("Info")
+                .setView(sv)
+                .setPositiveButton("Schließen", null)
+                .show();
     }
 
     // ---------------------------------------------------------------- Sprache (Standard: Deutsch)
@@ -550,7 +745,7 @@ public class MainActivity extends Activity {
         if (intent == null || !Intent.ACTION_SEND.equals(intent.getAction())) return;
         @SuppressWarnings("deprecation") // die neue Variante gibt es erst ab Android 13, wir laufen ab 8
         Uri uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
-        if (uri != null) startTranscription(uri);
+        if (uri != null) startTranscription(uri, "Geteilte Sprachnachricht");
     }
 
     private void pickFile() {
@@ -565,7 +760,7 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
         if (requestCode == PICK_AUDIO) {
-            startTranscription(data.getData());
+            startTranscription(data.getData(), "Gewählte Datei");
         } else if (requestCode == PICK_FOLDER) {
             Uri tree = data.getData();
             try {
@@ -579,8 +774,9 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void startTranscription(final Uri uri) {
+    private void startTranscription(final Uri uri, String title) {
         if (busy) { toastBusy(); return; }
+        titleForNext = title;
         ModelStore.Model m = ModelStore.selected(this);
         if (ModelStore.isInstalled(this, m)) {
             transcribe(uri, m);
@@ -593,6 +789,8 @@ public class MainActivity extends Activity {
     private void transcribe(final Uri uri, final ModelStore.Model model) {
         if (busy) { toastBusy(); return; }
         busy = true;
+        final String title = titleForNext;
+        titleForNext = null;
         result.setText("");
         resultCard.setVisibility(View.GONE);
         setEnabledLook(copyBtn, false);
@@ -637,6 +835,7 @@ public class MainActivity extends Activity {
                     busy = false;
                     status.setText(String.format(Locale.GERMANY,
                             "Fertig. %.0f s Audio in %.1f s transkribiert.", seconds, took));
+                    resultTitle.setText(title != null ? title : "");
                     result.setText(text.isEmpty() ? "(Kein Text erkannt)" : text);
                     resultCard.setVisibility(View.VISIBLE);
                     setEnabledLook(copyBtn, !text.isEmpty());
