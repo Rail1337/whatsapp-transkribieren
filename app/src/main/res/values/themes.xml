@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Versania-Farben: Waldgrün, Violett, Gold (wie beim NPC-Generator) -->
+    <color name="vs_bg">#08200D</color>
+    <color name="vs_window">#1C3624</color>
+    <color name="vs_gold">#B8973A</color>
+
+    <style name="AppTheme" parent="@android:style/Theme.DeviceDefault.NoActionBar">
+        <item name="android:windowBackground">@color/vs_bg</item>
+        <item name="android:statusBarColor">@color/vs_bg</item>
+        <item name="android:navigationBarColor">@color/vs_bg</item>
+        <item name="android:colorAccent">#8FD67A</item>
+    </style>
+</resources>
