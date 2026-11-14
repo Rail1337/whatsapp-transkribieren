@@ -24,9 +24,6 @@ android {
         }
     }
 
-    // Das Modell darf nicht komprimiert werden, sonst kann es nicht direkt geladen werden.
-    androidResources { noCompress 'bin' }
-
     buildTypes {
         release {
             minifyEnabled false

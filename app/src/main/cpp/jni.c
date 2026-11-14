@@ -161,9 +161,10 @@ Java_com_railarcanum_transkription_WhisperLib_freeContext(
     whisper_free(context);
 }
 
-JNIEXPORT void JNICALL
+JNIEXPORT jint JNICALL
 Java_com_railarcanum_transkription_WhisperLib_fullTranscribe(
-        JNIEnv *env, jclass thiz, jlong context_ptr, jint num_threads, jfloatArray audio_data) {
+        JNIEnv *env, jclass thiz, jlong context_ptr, jint num_threads, jfloatArray audio_data,
+        jstring language) {
     UNUSED(thiz);
     struct whisper_context *context = (struct whisper_context *) context_ptr;
     jfloat *audio_data_arr = (*env)->GetFloatArrayElements(env, audio_data, NULL);
@@ -176,7 +177,8 @@ Java_com_railarcanum_transkription_WhisperLib_fullTranscribe(
     params.print_timestamps = true;
     params.print_special = false;
     params.translate = false;
-    params.language = "de";
+    const char *lang = (*env)->GetStringUTFChars(env, language, NULL);
+    params.language = lang; // "de", "en", ... oder "auto" fuer automatische Erkennung
     params.n_threads = num_threads;
     params.offset_ms = 0;
     params.no_context = true;
@@ -185,12 +187,15 @@ Java_com_railarcanum_transkription_WhisperLib_fullTranscribe(
     whisper_reset_timings(context);
 
     LOGI("About to run whisper_full");
-    if (whisper_full(context, params, audio_data_arr, audio_data_length) != 0) {
+    int rc = whisper_full(context, params, audio_data_arr, audio_data_length);
+    if (rc != 0) {
         LOGI("Failed to run the model");
     } else {
         whisper_print_timings(context);
     }
+    (*env)->ReleaseStringUTFChars(env, language, lang);
     (*env)->ReleaseFloatArrayElements(env, audio_data, audio_data_arr, JNI_ABORT);
+    return rc;
 }
 
 JNIEXPORT jint JNICALL

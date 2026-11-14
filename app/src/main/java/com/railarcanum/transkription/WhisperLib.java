@@ -1,6 +1,5 @@
 package com.railarcanum.transkription;
 
-import android.content.res.AssetManager;
 import android.os.Build;
 import android.util.Log;
 
@@ -32,9 +31,10 @@ final class WhisperLib {
         return false;
     }
 
-    static native long initContextFromAsset(AssetManager assetManager, String assetPath);
+    static native long initContext(String modelPath);
     static native void freeContext(long contextPtr);
-    static native void fullTranscribe(long contextPtr, int numThreads, float[] audioData);
+    /** Gibt 0 zurück, wenn es geklappt hat. */
+    static native int fullTranscribe(long contextPtr, int numThreads, float[] audioData, String language);
     static native int getTextSegmentCount(long contextPtr);
     static native String getTextSegment(long contextPtr, int index);
     static native String getSystemInfo();

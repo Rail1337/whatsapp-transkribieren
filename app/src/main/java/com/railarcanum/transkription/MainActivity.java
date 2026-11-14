@@ -1,17 +1,18 @@
 package com.railarcanum.transkription;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.net.ConnectivityManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.TypedValue;
 import android.view.Gravity;
-import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -23,27 +24,30 @@ import java.util.concurrent.Executors;
 
 /**
  * Nimmt eine geteilte Sprachnachricht (oder eine gewählte Audiodatei) an und transkribiert sie
- * offline auf Deutsch mit Whisper.
+ * offline auf Deutsch mit Whisper. Die Modelle lädt man in der App und kann mehrere behalten.
  */
 public class MainActivity extends Activity {
     private static final int PICK_AUDIO = 1;
-    private static final String MODEL_ASSET = "ggml-small-q5_1.bin";
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     private TextView status;
     private TextView result;
+    private Button modelBtn;
+    private Button langBtn;
     private Button copyBtn;
     private Button shareBtn;
 
-    private long ctx = 0; // Whisper-Kontext, wird beim ersten Mal geladen
+    private long ctx = 0;          // geladener Whisper-Kontext
+    private String ctxModelId = ""; // zu welchem Modell er gehört
     private boolean busy = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         buildUi();
+        refreshModelButton();
         handleIntent(getIntent());
     }
 
@@ -63,6 +67,8 @@ public class MainActivity extends Activity {
         if (c != 0) new Thread(() -> WhisperLib.freeContext(c)).start();
     }
 
+    // ---------------------------------------------------------------- Oberfläche
+
     private void buildUi() {
         int pad = dp(16);
         LinearLayout root = new LinearLayout(this);
@@ -73,6 +79,14 @@ public class MainActivity extends Activity {
         title.setText("WhatsApp Transkription");
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
         root.addView(title);
+
+        modelBtn = new Button(this);
+        modelBtn.setOnClickListener(v -> showModelList());
+        root.addView(modelBtn);
+
+        langBtn = new Button(this);
+        langBtn.setOnClickListener(v -> showLanguageList());
+        root.addView(langBtn);
 
         status = new TextView(this);
         status.setText("Sprachnachricht in WhatsApp gedrückt halten, Teilen wählen, diese App auswählen. Oder unten eine Datei wählen.");
@@ -119,11 +133,146 @@ public class MainActivity extends Activity {
                 getResources().getDisplayMetrics());
     }
 
+    private void refreshModelButton() {
+        ModelStore.Model m = ModelStore.selected(this);
+        modelBtn.setText("Modell: " + m.label + (ModelStore.isInstalled(this, m) ? "" : "  (nicht geladen)"));
+        langBtn.setText("Sprache: " + selectedLanguage()[1]);
+    }
+
+    // ---------------------------------------------------------------- Sprache (Standard: Deutsch)
+
+    /** Code für Whisper und Anzeigename. "auto" lässt Whisper die Sprache selbst erkennen. */
+    private static final String[][] LANGUAGES = {
+            {"de", "Deutsch"}, {"en", "Englisch"}, {"fr", "Französisch"}, {"es", "Spanisch"},
+            {"it", "Italienisch"}, {"tr", "Türkisch"}, {"pl", "Polnisch"}, {"ru", "Russisch"},
+            {"auto", "Automatisch erkennen"},
+    };
+
+    private String[] selectedLanguage() {
+        String code = getSharedPreferences("einstellungen", MODE_PRIVATE).getString("sprache", "de");
+        for (String[] l : LANGUAGES) if (l[0].equals(code)) return l;
+        return LANGUAGES[0];
+    }
+
+    private void showLanguageList() {
+        if (busy) { toastBusy(); return; }
+        String[] names = new String[LANGUAGES.length];
+        for (int i = 0; i < names.length; i++) names[i] = LANGUAGES[i][1];
+        new AlertDialog.Builder(this)
+                .setTitle("Sprache der Sprachnachricht")
+                .setItems(names, (d, which) -> {
+                    getSharedPreferences("einstellungen", MODE_PRIVATE).edit()
+                            .putString("sprache", LANGUAGES[which][0]).apply();
+                    refreshModelButton();
+                })
+                .setNegativeButton("Schließen", null)
+                .show();
+    }
+
+    // ---------------------------------------------------------------- Modelle
+
+    private void showModelList() {
+        if (busy) { toastBusy(); return; }
+        final ModelStore.Model[] all = ModelStore.MODELS;
+        ModelStore.Model sel = ModelStore.selected(this);
+        String[] items = new String[all.length];
+        for (int i = 0; i < all.length; i++) {
+            ModelStore.Model m = all[i];
+            items[i] = (m.id.equals(sel.id) ? "● " : "○ ") + m.label + " – " + m.sizeText()
+                    + "\n" + (ModelStore.isInstalled(this, m) ? "geladen" : "nicht geladen") + ", " + m.hint;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Sprachmodell wählen")
+                .setItems(items, (d, which) -> showModelActions(all[which]))
+                .setNegativeButton("Schließen", null)
+                .show();
+    }
+
+    private void showModelActions(final ModelStore.Model m) {
+        if (ModelStore.isInstalled(this, m)) {
+            new AlertDialog.Builder(this)
+                    .setTitle(m.label)
+                    .setItems(new String[]{"Verwenden", "Löschen (" + m.sizeText() + " frei)"}, (d, which) -> {
+                        if (which == 0) {
+                            ModelStore.select(this, m);
+                            refreshModelButton();
+                        } else {
+                            ModelStore.delete(this, m);
+                            if (ctxModelId.equals(m.id)) dropContext();
+                            refreshModelButton();
+                        }
+                    })
+                    .setNegativeButton("Zurück", (d, w) -> showModelList())
+                    .show();
+        } else {
+            confirmDownload(m, () -> {
+                ModelStore.select(this, m);
+                refreshModelButton();
+            });
+        }
+    }
+
+    /** Fragt vor dem Laden nach, im Mobilfunknetz mit Hinweis auf das Datenvolumen. */
+    private void confirmDownload(final ModelStore.Model m, final Runnable afterwards) {
+        String msg = m.label + " ist " + m.sizeText() + " groß und wird einmalig geladen.";
+        if (isMetered()) msg += "\n\nAchtung: Du bist im Mobilfunknetz, das verbraucht Datenvolumen. WLAN ist besser.";
+        new AlertDialog.Builder(this)
+                .setTitle("Modell laden?")
+                .setMessage(msg)
+                .setPositiveButton("Laden", (d, w) -> downloadModel(m, afterwards))
+                .setNegativeButton("Abbrechen", null)
+                .show();
+    }
+
+    private boolean isMetered() {
+        ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        return cm != null && cm.isActiveNetworkMetered();
+    }
+
+    private void downloadModel(final ModelStore.Model m, final Runnable afterwards) {
+        if (busy) { toastBusy(); return; }
+        busy = true;
+        status.setText("Lade " + m.label + " … 0 %");
+        worker.execute(() -> {
+            try {
+                final int[] last = {-1};
+                ModelStore.download(this, m, (done, total) -> {
+                    int pct = (int) (done * 100 / total);
+                    if (pct != last[0]) {
+                        last[0] = pct;
+                        setStatus("Lade " + m.label + " … " + pct + " %");
+                    }
+                });
+                ui.post(() -> {
+                    busy = false;
+                    status.setText(m.label + " ist geladen.");
+                    if (afterwards != null) afterwards.run();
+                    refreshModelButton();
+                });
+            } catch (final Exception e) {
+                ui.post(() -> {
+                    busy = false;
+                    status.setText("Laden hat nicht geklappt: " + e.getMessage());
+                    refreshModelButton();
+                });
+            }
+        });
+    }
+
+    private void dropContext() {
+        final long c = ctx;
+        ctx = 0;
+        ctxModelId = "";
+        if (c != 0) worker.execute(() -> WhisperLib.freeContext(c));
+    }
+
+    // ---------------------------------------------------------------- Transkription
+
     private void handleIntent(Intent intent) {
         if (intent == null || !Intent.ACTION_SEND.equals(intent.getAction())) return;
         @SuppressWarnings("deprecation") // die neue Variante gibt es erst ab Android 13, wir laufen ab 8
         Uri uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
-        if (uri != null) transcribe(uri);
+        if (uri != null) startTranscription(uri);
     }
 
     private void pickFile() {
@@ -137,15 +286,23 @@ public class MainActivity extends Activity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == PICK_AUDIO && resultCode == RESULT_OK && data != null && data.getData() != null) {
-            transcribe(data.getData());
+            startTranscription(data.getData());
         }
     }
 
-    private void transcribe(final Uri uri) {
-        if (busy) {
-            Toast.makeText(this, "Es läuft schon eine Transkription.", Toast.LENGTH_SHORT).show();
-            return;
+    private void startTranscription(final Uri uri) {
+        if (busy) { toastBusy(); return; }
+        ModelStore.Model m = ModelStore.selected(this);
+        if (ModelStore.isInstalled(this, m)) {
+            transcribe(uri, m);
+        } else {
+            // Erster Start: erst das gewählte Modell laden, dann gleich weitermachen.
+            confirmDownload(m, () -> transcribe(uri, m));
         }
+    }
+
+    private void transcribe(final Uri uri, final ModelStore.Model model) {
+        if (busy) { toastBusy(); return; }
         busy = true;
         result.setText("");
         copyBtn.setEnabled(false);
@@ -157,16 +314,28 @@ public class MainActivity extends Activity {
                 float[] audio = AudioDecoder.decode(this, uri);
                 float seconds = audio.length / (float) AudioDecoder.TARGET_RATE;
 
+                if (ctx != 0 && !ctxModelId.equals(model.id)) {
+                    WhisperLib.freeContext(ctx);
+                    ctx = 0;
+                    ctxModelId = "";
+                }
                 if (ctx == 0) {
-                    setStatus("Lade Sprachmodell (nur beim ersten Mal) …");
-                    ctx = WhisperLib.initContextFromAsset(getAssets(), MODEL_ASSET);
-                    if (ctx == 0) throw new IllegalStateException("Sprachmodell konnte nicht geladen werden.");
+                    setStatus("Lade " + model.label + " in den Speicher …");
+                    ctx = WhisperLib.initContext(ModelStore.fileOf(this, model).getAbsolutePath());
+                    if (ctx == 0) {
+                        // Datei kaputt: löschen, damit sie beim nächsten Mal neu geladen wird.
+                        ModelStore.delete(this, model);
+                        throw new IllegalStateException(
+                                "Das Modell ließ sich nicht öffnen. Ich habe es gelöscht, bitte neu laden.");
+                    }
+                    ctxModelId = model.id;
                 }
 
                 setStatus(String.format("Transkribiere %.0f Sekunden Audio …", seconds));
                 long t0 = System.currentTimeMillis();
                 int threads = Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors()));
-                WhisperLib.fullTranscribe(ctx, threads, audio);
+                int rc = WhisperLib.fullTranscribe(ctx, threads, audio, selectedLanguage()[0]);
+                if (rc != 0) throw new IllegalStateException("Whisper meldet Fehler " + rc + ".");
 
                 StringBuilder sb = new StringBuilder();
                 int n = WhisperLib.getTextSegmentCount(ctx);
@@ -180,18 +349,26 @@ public class MainActivity extends Activity {
                     result.setText(text.isEmpty() ? "(Kein Text erkannt)" : text);
                     copyBtn.setEnabled(!text.isEmpty());
                     shareBtn.setEnabled(!text.isEmpty());
+                    refreshModelButton();
                 });
             } catch (final Exception e) {
                 ui.post(() -> {
                     busy = false;
                     status.setText("Das hat nicht geklappt: " + e.getMessage());
+                    refreshModelButton();
                 });
             }
         });
     }
 
+    // ---------------------------------------------------------------- Kleinkram
+
     private void setStatus(final String s) {
         ui.post(() -> status.setText(s));
+    }
+
+    private void toastBusy() {
+        Toast.makeText(this, "Es läuft gerade etwas, bitte kurz warten.", Toast.LENGTH_SHORT).show();
     }
 
     private void copyText() {
