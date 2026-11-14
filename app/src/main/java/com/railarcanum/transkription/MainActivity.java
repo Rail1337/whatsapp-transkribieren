@@ -166,14 +166,24 @@ public class MainActivity extends Activity {
         byRow.setGravity(Gravity.CENTER_VERTICAL);
         byRow.setPadding(0, dp(2), 0, dp(12));
         TextView by = new TextView(this);
-        by.setText("by Rail  ·  läuft komplett auf deinem Handy");
+        by.setText("by Rail  ·  Tool läuft komplett lokal");
         by.setTypeface(Typeface.SERIF, Typeface.ITALIC);
         by.setTextColor(MUTED);
         by.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         byRow.addView(by, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        Button info = textButton("Info");
+        // Runder violetter Info-Knopf mit goldenem „i“
+        TextView info = new TextView(this);
+        info.setText("i");
+        info.setGravity(Gravity.CENTER);
+        info.setTypeface(Typeface.SERIF, Typeface.BOLD_ITALIC);
+        info.setTextColor(GOLD_LIGHT);
+        info.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        info.setClickable(true);
+        info.setContentDescription("Info");
+        info.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF),
+                round(BTN_ACTIVE, dp(20), GOLD, dp(1)), null));
         info.setOnClickListener(v -> showInfo());
-        byRow.addView(info);
+        byRow.addView(info, new LinearLayout.LayoutParams(dp(40), dp(40)));
         root.addView(byRow);
 
         // Modell und Sprache
